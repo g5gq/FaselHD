@@ -20,19 +20,20 @@ async function searchResults(query) {
     }
 
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const items = doc.querySelectorAll("div.col-xs-12.col-sm-6.col-md-3");
+
+    const items = doc.querySelectorAll("div.col-xl-2.col-lg-3.col-md-3.col-sm-4.col-6");
     console.log("✅ Found items:", items.length);
 
     const results = [];
 
     items.forEach(item => {
         const a = item.querySelector("a");
-        const title = item.querySelector("div.post-title")?.textContent.trim();
-        const styleDiv = item.querySelector("div.post");
+        const title = item.querySelector(".post-title")?.textContent.trim();
+        const postDiv = item.querySelector("div.post");
 
         let image = "";
-        if (styleDiv) {
-            const style = styleDiv.getAttribute("style");
+        if (postDiv) {
+            const style = postDiv.getAttribute("style");
             const match = style?.match(/url\(['"]?(.*?)['"]?\)/);
             if (match) image = match[1];
         }
@@ -83,4 +84,27 @@ async function extractStreamUrl(url) {
         const match = onclick.match(/href\s*=\s*'([^']+)'/);
         if (!match) continue;
 
-        const videoPageUrl
+        const videoPageUrl = match[1].startsWith("http") ? match[1] : baseUrl + match[1];
+
+        const videoHtml = await soraFetch(videoPageUrl);
+        if (!videoHtml) continue;
+
+        const videoDoc = new DOMParser().parseFromString(videoHtml, "text/html");
+        const video = videoDoc.querySelector("video");
+
+        if (video) {
+            const src = video.getAttribute("src");
+            if (src && !src.startsWith("blob:")) {
+                sources.push({
+                    url: src,
+                    quality: "auto",
+                    isM3U8: src.includes(".m3u8")
+                });
+            }
+        }
+
+        if (sources.length > 0) break;
+    }
+
+    return sources;
+}
