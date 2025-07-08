@@ -1,0 +1,19 @@
+{
+    "sourceName": "faselhds.xyz",
+    "iconUrl": "https://www.faselhds.xyz/favicon.ico",
+    "author": {
+        "name": "Nizar",
+        "icon": "https://avatars.githubusercontent.com/u/219203192?v=4",
+        "url": "https://github.com/g5gq"
+    },
+    "version": "1.0",
+    "language": "Arabic",
+    "streamType": "HLS",
+    "quality": "1080p",
+    "baseUrl": "https://www.faselhds.xyz/",
+    "searchBaseUrl": "https://www.faselhds.xyz/?s=%s",
+    "scriptUrl": "https://raw.githubusercontent.com/g5gq/FaselHD/refs/heads/main/FaselHD.js",
+    "type": "movies/shows",
+    "asyncJS": true,
+    "softsub": false
+}
