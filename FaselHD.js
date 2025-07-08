@@ -2,52 +2,46 @@ const baseUrl = "https://www.faselhds.xyz";
 
 async function soraFetch(url, options = {}) {
     try {
-        return await fetchV2(url, options.headers ?? {}, options.method ?? "GET", options.body ?? null);
+        return await fetchV2(
+            url,
+            options.headers ?? {},
+            options.method ?? "GET",
+            options.body ?? null
+        );
     } catch (err) {
-        console.log("❌ soraFetch error:", err);
+        console.error("soraFetch error:", err);
         return null;
     }
 }
 
 async function searchResults(query) {
     const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
-    console.log("🔍 Search URL:", url);
-
     const html = await soraFetch(url);
-    if (!html) {
-        console.log("❌ Failed to fetch HTML");
-        return [];
-    }
+    if (!html) return [];
 
     const doc = new DOMParser().parseFromString(html, "text/html");
-
-    const items = doc.querySelectorAll("div.col-xl-2.col-lg-3.col-md-3.col-sm-4.col-6");
-    console.log("✅ Found items:", items.length);
-
+    const items = doc.querySelectorAll("div.postDiv");
     const results = [];
 
     items.forEach(item => {
         const a = item.querySelector("a");
-        const title = item.querySelector(".post-title")?.textContent.trim();
-        const postDiv = item.querySelector("div.post");
+        if (!a) return;
 
-        let image = "";
-        if (postDiv) {
-            const style = postDiv.getAttribute("style");
-            const match = style?.match(/url\(['"]?(.*?)['"]?\)/);
-            if (match) image = match[1];
-        }
+        let href = a.getAttribute("href") || "";
+        if (href.startsWith("/")) href = baseUrl + href;
 
-        if (a && a.href && title) {
-            results.push({
-                title,
-                href: a.href,
-                image
-            });
+        const imgEl = item.querySelector("div.imgdiv-class img");
+        let image = imgEl?.getAttribute("src") ?? "";
+        if (image.startsWith("/")) image = baseUrl + image;
+
+        const titleEl = item.querySelector("div.h1");
+        const title = titleEl?.textContent.trim() ?? "";
+
+        if (href && title) {
+            results.push({ title, href, image });
         }
     });
 
-    console.log("🎯 Final search results:", results);
     return results;
 }
 
@@ -57,15 +51,19 @@ async function extractDetails(url) {
 
     const doc = new DOMParser().parseFromString(html, "text/html");
 
-    const title = doc.querySelector("div.title")?.textContent.trim() ?? "";
-    const desc = doc.querySelector(".singleDesc p")?.textContent.trim() ?? "";
-    const img = doc.querySelector("div.posterImg img")?.getAttribute("src") ?? "";
+    const title = doc.querySelector("div.h1.title")?.textContent.trim() ?? "";
+    const description = doc.querySelector(".singleDesc p")?.textContent.trim() ?? "";
+    const imgEl = doc.querySelector("div.posterImg img");
+    let image = imgEl?.getAttribute("src") ?? "";
+    if (image.startsWith("/")) image = baseUrl + image;
 
-    return {
-        title,
-        description: desc,
-        image: img
-    };
+    return { title, description, image };
+}
+
+async function extractEpisodes(url) {
+    // faselhds.xyz does not expose episode lists in a consistent HTML structure
+    // Episodes are not supported in this version
+    return [];
 }
 
 async function extractStreamUrl(url) {
@@ -73,37 +71,35 @@ async function extractStreamUrl(url) {
     if (!html) return [];
 
     const doc = new DOMParser().parseFromString(html, "text/html");
-
     const servers = doc.querySelectorAll("ul.tabs-ul li");
     const sources = [];
 
-    for (const server of servers) {
-        const onclick = server.getAttribute("onclick");
-        if (!onclick) continue;
+    for (const li of servers) {
+        const onclick = li.getAttribute("onclick") || "";
+        const m = onclick.match(/'(\/video_player\?[^']+)'/);
+        if (!m) continue;
 
-        const match = onclick.match(/href\s*=\s*'([^']+)'/);
-        if (!match) continue;
+        let playerUrl = m[1];
+        if (!playerUrl.startsWith("http")) playerUrl = baseUrl + playerUrl;
 
-        const videoPageUrl = match[1].startsWith("http") ? match[1] : baseUrl + match[1];
+        const playerHtml = await soraFetch(playerUrl);
+        if (!playerHtml) continue;
 
-        const videoHtml = await soraFetch(videoPageUrl);
-        if (!videoHtml) continue;
-
-        const videoDoc = new DOMParser().parseFromString(videoHtml, "text/html");
-        const video = videoDoc.querySelector("video");
-
-        if (video) {
-            const src = video.getAttribute("src");
-            if (src && !src.startsWith("blob:")) {
-                sources.push({
-                    url: src,
-                    quality: "auto",
-                    isM3U8: src.includes(".m3u8")
-                });
-            }
+        // Try to extract .m3u8 from JWPlayer config
+        const fileMatch = playerHtml.match(/file:\s*"([^"]+\.m3u8)"/);
+        if (fileMatch) {
+            sources.push({ url: fileMatch[1], isM3U8: true });
+            break;
         }
 
-        if (sources.length > 0) break;
+        // Fallback: look for a <video> tag
+        const vdoc = new DOMParser().parseFromString(playerHtml, "text/html");
+        const videoEl = vdoc.querySelector("video");
+        const src = videoEl?.getAttribute("src") ?? "";
+        if (src && !src.startsWith("blob:")) {
+            sources.push({ url: src, isM3U8: src.includes(".m3u8") });
+            break;
+        }
     }
 
     return sources;
