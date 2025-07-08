@@ -1,98 +1,100 @@
 const baseUrl = "https://www.faselhds.xyz";
-
-/**
- * Custom fetch function using proxy.
- */
-async function fetchV2(url) {
-    try {
-        const proxyUrl = `https://faseldhdproxy-hq1a.vercel.app/?url=${encodeURIComponent(url)}`;
-        const response = await fetch(proxyUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0',
-                'Referer': baseUrl
-            }
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch: ${url} (status: ${response.status})`);
-        }
-        return await response.text();
-    } catch (error) {
-        console.error("Error in fetchV2:", error);
-        throw error;
-    }
-}
+const proxy = "https://faseldhdproxy-hq1a.vercel.app/?url=";
 
 /**
  * Search for movies and shows on faselhds.xyz.
  */
 async function search(query) {
     const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
-    console.log("Searching URL:", url);
+    console.log(`Searching: ${url}`);
     try {
         const html = await fetchV2(url);
-        const results = searchResults(html);
-        console.log(`Found ${results.length} results.`);
-        return results;
-    } catch (err) {
-        console.error("Search error:", err);
+        return await searchResults(html); // FIXED: searchResults is now async
+    } catch (e) {
+        console.error("Search failed:", e);
         return [];
     }
 }
 
 /**
- * Parse search result HTML.
+ * Parses the search result HTML and returns an array of result objects.
  */
-function searchResults(html) {
+async function searchResults(html) {
     const results = [];
     const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const items = doc.querySelectorAll('div.postDiv');
+    const doc = parser.parseFromString(html, "text/html");
+    const items = doc.querySelectorAll("div.postDiv");
+
+    if (items.length === 0) {
+        console.log("No results found.");
+    }
 
     items.forEach(item => {
-        const a = item.querySelector('a');
-        const img = item.querySelector('img');
-        const titleDiv = item.querySelector('div.h1');
+        const a = item.querySelector("a");
+        const img = item.querySelector("img");
+        const titleDiv = item.querySelector("div.h1");
 
-        let href = a?.getAttribute('href') || '';
-        let image = img?.getAttribute('src') || '';
-        const title = titleDiv ? titleDiv.textContent.trim() : '';
+        let href = a?.getAttribute("href") || "";
+        let image = img?.getAttribute("src") || "";
+        const title = titleDiv ? titleDiv.textContent.trim() : "";
 
-        if (href.startsWith('/')) href = baseUrl + href;
-        else if (!href.startsWith('http')) href = baseUrl + '/' + href;
+        if (href.startsWith("/")) href = baseUrl + href;
+        else if (!href.startsWith("http")) href = baseUrl + "/" + href;
 
-        if (image.startsWith('/')) image = baseUrl + image;
+        if (image.startsWith("/")) image = baseUrl + image;
 
         if (title && href) {
             results.push({ title, image, href });
         }
     });
 
+    console.log("Search found items:", results.length);
     return results;
 }
 
 /**
- * Extract movie/show details.
+ * Fetch HTML content using the working proxy.
+ */
+async function fetchV2(url) {
+    try {
+        const finalUrl = proxy + encodeURIComponent(url);
+        const res = await fetch(finalUrl, {
+            headers: {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": baseUrl
+            }
+        });
+        if (!res.ok) throw new Error(`Proxy fetch failed: ${res.status}`);
+        return await res.text();
+    } catch (err) {
+        console.error("fetchV2 error:", err);
+        throw err;
+    }
+}
+
+/**
+ * Extract description and airdate from the detail page.
  */
 function extractDetails(html) {
     const details = [];
     const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    const doc = parser.parseFromString(html, "text/html");
 
-    const descEl = doc.querySelector('div.singleDesc');
-    const description = descEl ? descEl.textContent.trim() : '';
+    const descEl = doc.querySelector("div.singleDesc");
+    const description = descEl ? descEl.textContent.trim() : "";
 
-    let airdate = '';
-    const yearIcon = doc.querySelector('i.far.fa-calendar-alt');
+    let airdate = "";
+    const yearIcon = doc.querySelector("i.far.fa-calendar-alt");
     if (yearIcon && yearIcon.parentElement) {
         const yearText = yearIcon.parentElement.textContent;
         const match = yearText.match(/\d{4}/);
-        airdate = match ? match[0] : '';
+        if (match) airdate = match[0];
     }
 
     if (description) {
         details.push({
             description,
-            aliases: '',
+            aliases: "",
             airdate
         });
     }
@@ -101,22 +103,28 @@ function extractDetails(html) {
 }
 
 /**
- * Extract episodes from a season/show page.
+ * Extract episodes (Arabic "الحلقة") from HTML.
  */
 function extractEpisodes(html) {
     const episodes = [];
     const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    const doc = parser.parseFromString(html, "text/html");
 
-    const anchors = doc.querySelectorAll('a');
+    const anchors = doc.querySelectorAll("a");
     anchors.forEach(a => {
         const text = a.textContent.trim();
         const match = text.match(/^الحلقة\s*(\d+)$/);
         if (match) {
-            let href = a.getAttribute('href') || '';
-            if (href.startsWith('/')) href = baseUrl + href;
-            else if (!href.startsWith('http')) href = baseUrl + '/' + href;
-            episodes.push({ href, number: match[1] });
+            let href = a.getAttribute("href");
+            if (!href) return;
+
+            if (href.startsWith("/")) href = baseUrl + href;
+            else if (!href.startsWith("http")) href = baseUrl + "/" + href;
+
+            episodes.push({
+                href,
+                number: match[1]
+            });
         }
     });
 
@@ -125,16 +133,17 @@ function extractEpisodes(html) {
 }
 
 /**
- * Extract actual .m3u8 stream URL.
+ * Extract the final .m3u8 stream URL from video_player.
  */
 async function extractStreamUrl(html) {
-    if (!html.includes('file:')) {
+    if (!html.includes("file:")) {
         const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        const liTabs = doc.querySelectorAll('ul.tabs-ul li');
+        const doc = parser.parseFromString(html, "text/html");
+
+        const liTabs = doc.querySelectorAll("ul.tabs-ul li");
         for (const li of liTabs) {
-            const onclick = li.getAttribute('onclick');
-            if (onclick && onclick.includes('/video_player')) {
+            const onclick = li.getAttribute("onclick");
+            if (onclick?.includes("/video_player")) {
                 const match = onclick.match(/\/video_player[^'"]+/);
                 if (match) {
                     const videoUrl = baseUrl + match[0];
