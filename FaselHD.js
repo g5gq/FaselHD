@@ -1,111 +1,150 @@
 const baseUrl = "https://www.faselhds.xyz";
-const proxy = "https://faseldhdproxy-hq1a.vercel.app/?url=";
 
+/**
+ * Custom fetch function using proxy.
+ */
+async function fetchV2(url) {
+    try {
+        const proxyUrl = `https://faseldhdproxy-hq1a.vercel.app/?url=${encodeURIComponent(url)}`;
+        const response = await fetch(proxyUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': baseUrl
+            }
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to fetch: ${url} (status: ${response.status})`);
+        }
+        return await response.text();
+    } catch (error) {
+        console.error("Error in fetchV2:", error);
+        throw error;
+    }
+}
+
+/**
+ * Search for movies and shows on faselhds.xyz.
+ */
 async function search(query) {
     const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
     console.log("Searching URL:", url);
-    const html = await fetchHtml(url);
-    return searchResults(html);
+    try {
+        const html = await fetchV2(url);
+        const results = searchResults(html);
+        console.log(`Found ${results.length} results.`);
+        return results;
+    } catch (err) {
+        console.error("Search error:", err);
+        return [];
+    }
 }
 
-async function fetchHtml(url) {
-    const fullUrl = `${proxy}${encodeURIComponent(url)}`;
-    console.log("Fetching via proxy:", fullUrl);
-    const res = await fetch(fullUrl, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0',
-            'Referer': baseUrl
-        }
-    });
-    if (!res.ok) throw new Error(`Proxy failed: ${res.status}`);
-    return await res.text();
-}
-
+/**
+ * Parse search result HTML.
+ */
 function searchResults(html) {
     const results = [];
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
     const items = doc.querySelectorAll('div.postDiv');
-    console.log("Search found items:", items.length);
 
     items.forEach(item => {
         const a = item.querySelector('a');
-        const titleEl = item.querySelector('.h1');
         const img = item.querySelector('img');
+        const titleDiv = item.querySelector('div.h1');
 
-        if (!a || !titleEl || !img) return;
+        let href = a?.getAttribute('href') || '';
+        let image = img?.getAttribute('src') || '';
+        const title = titleDiv ? titleDiv.textContent.trim() : '';
 
-        const href = a.getAttribute('href')?.startsWith('http') ? a.getAttribute('href') : baseUrl + a.getAttribute('href');
-        const image = img.getAttribute('src')?.startsWith('http') ? img.getAttribute('src') : baseUrl + img.getAttribute('src');
+        if (href.startsWith('/')) href = baseUrl + href;
+        else if (!href.startsWith('http')) href = baseUrl + '/' + href;
 
-        results.push({
-            title: titleEl.textContent.trim(),
-            image,
-            href
-        });
+        if (image.startsWith('/')) image = baseUrl + image;
+
+        if (title && href) {
+            results.push({ title, image, href });
+        }
     });
 
     return results;
 }
 
+/**
+ * Extract movie/show details.
+ */
 function extractDetails(html) {
+    const details = [];
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const desc = doc.querySelector('div.singleDesc')?.textContent.trim() || '';
-    const dateIcon = doc.querySelector('i.far.fa-calendar-alt');
-    let airdate = '';
 
-    if (dateIcon?.parentElement) {
-        const text = dateIcon.parentElement.textContent;
-        const match = text.match(/\d{4}/);
+    const descEl = doc.querySelector('div.singleDesc');
+    const description = descEl ? descEl.textContent.trim() : '';
+
+    let airdate = '';
+    const yearIcon = doc.querySelector('i.far.fa-calendar-alt');
+    if (yearIcon && yearIcon.parentElement) {
+        const yearText = yearIcon.parentElement.textContent;
+        const match = yearText.match(/\d{4}/);
         airdate = match ? match[0] : '';
     }
 
-    return [{
-        description: desc,
-        aliases: '',
-        airdate
-    }];
+    if (description) {
+        details.push({
+            description,
+            aliases: '',
+            airdate
+        });
+    }
+
+    return details;
 }
 
+/**
+ * Extract episodes from a season/show page.
+ */
 function extractEpisodes(html) {
     const episodes = [];
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const links = doc.querySelectorAll('a');
 
-    links.forEach(link => {
-        const text = link.textContent.trim();
+    const anchors = doc.querySelectorAll('a');
+    anchors.forEach(a => {
+        const text = a.textContent.trim();
         const match = text.match(/^الحلقة\s*(\d+)$/);
         if (match) {
-            const href = link.getAttribute('href')?.startsWith('http') ? link.getAttribute('href') : baseUrl + link.getAttribute('href');
-            episodes.push({
-                href,
-                number: match[1]
-            });
+            let href = a.getAttribute('href') || '';
+            if (href.startsWith('/')) href = baseUrl + href;
+            else if (!href.startsWith('http')) href = baseUrl + '/' + href;
+            episodes.push({ href, number: match[1] });
         }
     });
 
-    return episodes.reverse();
+    episodes.reverse();
+    return episodes;
 }
 
+/**
+ * Extract actual .m3u8 stream URL.
+ */
 async function extractStreamUrl(html) {
     if (!html.includes('file:')) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
-        const tabs = doc.querySelectorAll('ul.tabs-ul li');
-
-        for (const li of tabs) {
+        const liTabs = doc.querySelectorAll('ul.tabs-ul li');
+        for (const li of liTabs) {
             const onclick = li.getAttribute('onclick');
-            const match = onclick?.match(/\/video_player[^'"]+/);
-            if (match) {
-                const videoUrl = baseUrl + match[0];
-                html = await fetchHtml(videoUrl);
-                break;
+            if (onclick && onclick.includes('/video_player')) {
+                const match = onclick.match(/\/video_player[^'"]+/);
+                if (match) {
+                    const videoUrl = baseUrl + match[0];
+                    html = await fetchV2(videoUrl);
+                    break;
+                }
             }
         }
     }
 
-    const streamMatch = html.match(/file:\s*"([^"]+\.m3u8)"/);
-    return streamMatch ? streamMatch[1] : null;
+    const fileMatch = html.match(/file:\s*"([^"]+\.m3u8)"/);
+    return fileMatch ? fileMatch[1] : null;
 }
