@@ -15,7 +15,7 @@ async function searchResults(query) {
     if (!html) return [];
 
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const items = doc.querySelectorAll("div.postDiv");
+    const items = doc.querySelectorAll("div.col-xs-12.col-sm-6.col-md-3");
     const results = [];
 
     items.forEach(item => {
@@ -23,15 +23,18 @@ async function searchResults(query) {
         if (!a) return;
 
         const href = a.getAttribute("href");
-        const title = item.querySelector("div.h1")?.textContent.trim();
-        const img = item.querySelector("img")?.getAttribute("src");
+        const title = item.querySelector("div.post-title")?.textContent.trim();
+        const styleDiv = item.querySelector("div.post");
+
+        let image = "";
+        if (styleDiv) {
+            const style = styleDiv.getAttribute("style");
+            const match = style?.match(/url\(['"]?(.*?)['"]?\)/);
+            if (match) image = match[1];
+        }
 
         if (href && title) {
-            results.push({
-                title,
-                href,
-                image: img || ""
-            });
+            results.push({ title, href, image });
         }
     });
 
@@ -90,7 +93,6 @@ async function extractStreamUrl(url) {
             }
         }
 
-        // optionally break after first working stream
         if (sources.length > 0) break;
     }
 
