@@ -1,29 +1,24 @@
 const baseUrl = "https://www.faselhds.xyz";
-const proxyUrl = "https://faseldhdproxy-hq1a.vercel.app/?url=";
-
-async function fetchV2(url) {
-    try {
-        const response = await fetch(`${proxyUrl}${encodeURIComponent(url)}`, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                'Referer': baseUrl
-            }
-        });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch: ${url} (status ${response.status})`);
-        }
-        return await response.text();
-    } catch (error) {
-        console.error("fetchV2 error:", error);
-        throw error;
-    }
-}
+const proxy = "https://faseldhdproxy-hq1a.vercel.app/?url=";
 
 async function search(query) {
     const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
-    console.log("Search URL:", url);
-    const html = await fetchV2(url);
+    console.log("Searching URL:", url);
+    const html = await fetchHtml(url);
     return searchResults(html);
+}
+
+async function fetchHtml(url) {
+    const fullUrl = `${proxy}${encodeURIComponent(url)}`;
+    console.log("Fetching via proxy:", fullUrl);
+    const res = await fetch(fullUrl, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': baseUrl
+        }
+    });
+    if (!res.ok) throw new Error(`Proxy failed: ${res.status}`);
+    return await res.text();
 }
 
 function searchResults(html) {
@@ -31,23 +26,20 @@ function searchResults(html) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
     const items = doc.querySelectorAll('div.postDiv');
-    console.log("Found search result items:", items.length);
+    console.log("Search found items:", items.length);
 
     items.forEach(item => {
         const a = item.querySelector('a');
-        const titleDiv = item.querySelector('.h1');
+        const titleEl = item.querySelector('.h1');
         const img = item.querySelector('img');
 
-        if (!a || !titleDiv || !img) return;
+        if (!a || !titleEl || !img) return;
 
-        let href = a.getAttribute('href');
-        if (href && href.startsWith('/')) href = baseUrl + href;
-
-        let image = img.getAttribute('src');
-        if (image && image.startsWith('/')) image = baseUrl + image;
+        const href = a.getAttribute('href')?.startsWith('http') ? a.getAttribute('href') : baseUrl + a.getAttribute('href');
+        const image = img.getAttribute('src')?.startsWith('http') ? img.getAttribute('src') : baseUrl + img.getAttribute('src');
 
         results.push({
-            title: titleDiv.textContent.trim(),
+            title: titleEl.textContent.trim(),
             image,
             href
         });
@@ -59,18 +51,18 @@ function searchResults(html) {
 function extractDetails(html) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-
-    const description = doc.querySelector('div.singleDesc')?.textContent.trim() || '';
+    const desc = doc.querySelector('div.singleDesc')?.textContent.trim() || '';
+    const dateIcon = doc.querySelector('i.far.fa-calendar-alt');
     let airdate = '';
 
-    const icon = doc.querySelector('i.far.fa-calendar-alt');
-    if (icon && icon.parentElement) {
-        const match = icon.parentElement.textContent.match(/\d{4}/);
+    if (dateIcon?.parentElement) {
+        const text = dateIcon.parentElement.textContent;
+        const match = text.match(/\d{4}/);
         airdate = match ? match[0] : '';
     }
 
     return [{
-        description,
+        description: desc,
         aliases: '',
         airdate
     }];
@@ -80,14 +72,13 @@ function extractEpisodes(html) {
     const episodes = [];
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const anchors = doc.querySelectorAll('a');
+    const links = doc.querySelectorAll('a');
 
-    anchors.forEach(a => {
-        const text = a.textContent.trim();
+    links.forEach(link => {
+        const text = link.textContent.trim();
         const match = text.match(/^الحلقة\s*(\d+)$/);
         if (match) {
-            let href = a.getAttribute('href');
-            if (href && href.startsWith('/')) href = baseUrl + href;
+            const href = link.getAttribute('href')?.startsWith('http') ? link.getAttribute('href') : baseUrl + link.getAttribute('href');
             episodes.push({
                 href,
                 number: match[1]
@@ -102,17 +93,15 @@ async function extractStreamUrl(html) {
     if (!html.includes('file:')) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
-        const liTabs = doc.querySelectorAll('ul.tabs-ul li');
+        const tabs = doc.querySelectorAll('ul.tabs-ul li');
 
-        for (const li of liTabs) {
+        for (const li of tabs) {
             const onclick = li.getAttribute('onclick');
-            if (onclick?.includes('/video_player')) {
-                const match = onclick.match(/\/video_player[^'"]+/);
-                if (match) {
-                    const videoUrl = baseUrl + match[0];
-                    html = await fetchV2(videoUrl);
-                    break;
-                }
+            const match = onclick?.match(/\/video_player[^'"]+/);
+            if (match) {
+                const videoUrl = baseUrl + match[0];
+                html = await fetchHtml(videoUrl);
+                break;
             }
         }
     }
