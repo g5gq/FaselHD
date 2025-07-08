@@ -1,123 +1,188 @@
-async function searchResults(keyword) {
-    const uniqueResults = new Map();
-    const baseUrl = 'https://www.faselhds.xyz/?s=';
-    let page = 1;
+const baseUrl = "https://www.faselhds.xyz";
 
-    while (true) {
-        const url = `${baseUrl}${keyword}&page=${page}`;
-        const response = await soraFetch(url);
-        const html = await response.text();
+/**
+ * Search for movies and shows on faselhds.xyz.
+ * @param {string} query - Search query.
+ * @returns {Promise<Array<Object>>} Array of results with {title, image, href}.
+ */
+async function search(query) {
+    const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
+    console.log(`Searching for: ${query}`);
+    
+    try {
+        const html = await fetchV2(url);
+        return searchResults(html);
+    } catch (error) {
+        console.error("Error fetching search results:", error);
+        return [];
+    }
+}
 
-        // Match the search result items (movie blocks)
-        const regex = /<div class="col-xs-12 col-sm-6 col-md-3">[\s\S]*?<\/div>\s*<\/div>/g;
-        const matches = [...html.matchAll(regex)];
-
-        // If no matches are found, stop the loop
-        if (matches.length === 0) break;
-
-        // Process each match
-        matches.forEach(match => {
-            const anchorMatch = match[0].match(/<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
-            const href = anchorMatch ? anchorMatch[1] : null;
-            let title = anchorMatch ? anchorMatch[2] : null;
-            if (title) {
-                title = title.replace(/^فيلم\s*/,'').replace(/\s*مترجم$/,'').trim();
-            }
-
-            const imageMatch = match[0].match(/<div class="post"[^>]*style="[^"]*background-image:\s*url\(['"]?([^'")]+)['"]?\)/);
-            const image = imageMatch ? imageMatch[1] : '';
-
-            if (title && href) {
-                uniqueResults.set(href, { title, href, image });
-            }
-        });
-
-        // Move to the next page
-        page++;
+/**
+ * Parses the HTML of a search results page.
+ * @param {string} html - HTML of the search results page.
+ * @returns {Array<Object>} Array of results with title, image, href.
+ */
+function searchResults(html) {
+    const results = [];
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const items = doc.querySelectorAll('div.postDiv');
+    
+    if (items.length === 0) {
+        console.log("No results found.");
     }
 
-    const deduplicatedResults = Array.from(uniqueResults.values());
-    console.log(`Found ${deduplicatedResults.length} results.`);
-    return JSON.stringify(deduplicatedResults);
+    items.forEach(item => {
+        const a = item.querySelector('a');
+        if (!a) return;
+
+        let href = a.getAttribute('href');
+        if (!href) return;
+
+        // Make href absolute if needed
+        if (href.startsWith('/')) {
+            href = baseUrl + href;
+        } else if (!href.startsWith('http')) {
+            href = baseUrl + '/' + href;
+        }
+
+        const titleDiv = item.querySelector('div.h1');
+        const title = titleDiv ? titleDiv.textContent.trim() : '';
+        const imgEl = item.querySelector('img');
+        let image = imgEl ? imgEl.getAttribute('src') : '';
+        if (image && image.startsWith('/')) {
+            image = baseUrl + image;
+        }
+
+        if (title && href) {
+            results.push({
+                title: title,
+                image: image,
+                href: href
+            });
+        }
+    });
+
+    console.log(`Found ${results.length} results.`);
+    return results;
 }
 
-// Example usage:
-async function testSearch() {
-    const keyword = "your_search_term_here";  // Replace with your search term
-    const results = await searchResults(keyword);
-    console.log(results);
+/**
+ * Fetch HTML content using fetchV2 with error handling.
+ * @param {string} url - URL to fetch.
+ * @returns {Promise<string>} HTML content.
+ */
+async function fetchV2(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch: ${url}`);
+        }
+        return await response.text();
+    } catch (error) {
+        console.error("Error in fetchV2:", error);
+        throw error;  // Rethrow to propagate the error
+    }
 }
 
-// Uncomment to test search:
-// testSearch();
+/**
+ * Parse the HTML of a movie or show details page to extract description and year (airdate).
+ * @param {string} html - HTML of the details page.
+ * @returns {Array<Object>} Array with one details object.
+ */
+function extractDetails(html) {
+    const details = [];
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
 
-async function extractDetails(url) {
-    const response = await soraFetch(url);
-    const html = await response.text();
+    // Description
+    const descEl = doc.querySelector('div.singleDesc');
+    const description = descEl ? descEl.textContent.trim() : '';
+    
+    // Airdate (looking for icon with class "far fa-calendar-alt")
+    let airdate = '';
+    const yearIcon = doc.querySelector('i.far.fa-calendar-alt');
+    if (yearIcon && yearIcon.parentElement) {
+        const yearText = yearIcon.parentElement.textContent;
+        const yearMatch = yearText.match(/\d{4}/);
+        airdate = yearMatch ? yearMatch[0] : '';
+    }
 
-    const descriptionMatch = html.match(/<div class="story">\s*<p>([\s\S]*?)<\/p>/);
-    const description = descriptionMatch ? descriptionMatch[1].trim() : 'N/A';
+    if (description) {
+        details.push({
+            description: description,
+            aliases: '',
+            airdate: airdate
+        });
+    }
 
-    const airdateMatch = html.match(/<span>موعد الصدور\s*:<\/span>\s*<a[^>]*>(\d{4})<\/a>/);
-    const airdate = airdateMatch ? airdateMatch[1] : 'N/A';
+    return details;
+}
 
-    const aliasMatches = [];
-    const aliasSectionMatch = html.match(/<ul class="RightTaxContent">([\s\S]*?)<\/ul>/);
-    if (aliasSectionMatch) {
-        const section = aliasSectionMatch[1];
-        const items = [...section.matchAll(/<li[^>]*>[\s\S]*?<span>(.*?)<\/span>([\s\S]*?)<\/li>/g)];
-        for (const [, label, content] of items) {
-            if (label.includes("موعد الصدور")) continue;
+/**
+ * Parses the HTML of a show series or season page to extract episodes.
+ * @param {string} html - HTML of the episodes listing.
+ * @returns {Array<Object>} Array of episodes with {href, number}.
+ */
+function extractEpisodes(html) {
+    const episodes = [];
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const anchors = doc.querySelectorAll('a');
+    anchors.forEach(a => {
+        const text = a.textContent.trim();
+        // Match Arabic "الحلقة <digits>"
+        const match = text.match(/^الحلقة\s*(\d+)$/);
+        if (match) {
+            let href = a.getAttribute('href');
+            if (!href) return;
 
-            const values = [...content.matchAll(/<a[^>]*>(.*?)<\/a>/g)].map(m => m[1].trim());
-            if (values.length === 0) {
-                const strongValue = content.match(/<strong>(.*?)<\/strong>/);
-                if (strongValue) values.push(strongValue[1].trim());
+            // Make href absolute if needed
+            if (href.startsWith('/')) {
+                href = baseUrl + href;
+            } else if (!href.startsWith('http')) {
+                href = baseUrl + '/' + href;
             }
-            aliasMatches.push(`${label.trim()} ${values.join(', ')}`);
+
+            episodes.push({
+                href: href,
+                number: match[1]
+            });
+        }
+    });
+
+    // Order episodes by ascending number
+    episodes.reverse();
+    return episodes;
+}
+
+/**
+ * Extracts the actual video stream URL (.m3u8) from the detail page or video player page.
+ * @param {string} html - HTML of the detail or video player page.
+ * @returns {Promise<string|null>} Stream URL (.m3u8) or null if not found.
+ */
+async function extractStreamUrl(html) {
+    // Check if HTML already contains the stream file
+    if (!html.includes('file:')) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const liTabs = doc.querySelectorAll('ul.tabs-ul li');
+        
+        for (const li of liTabs) {
+            const onclick = li.getAttribute('onclick');
+            if (onclick && onclick.includes('/video_player')) {
+                const videoPathMatch = onclick.match(/\/video_player[^'"]+/);
+                if (videoPathMatch) {
+                    let videoPath = videoPathMatch[0];
+                    let videoUrl = videoPath.startsWith('http') ? videoPath : baseUrl + videoPath;
+                    html = await fetchV2(videoUrl);
+                    break;
+                }
+            }
         }
     }
 
-    return JSON.stringify([{
-        description,
-        aliases: aliasMatches.join('\n'),
-        airdate
-    }]);
-}
-
-async function extractEpisodes(url) {
-    const response = await soraFetch(url);
-    const html = await response.text();
-
-    const results = [];
-    const episodeRegex = /<a href="([^"]+)"[^>]*><div class="image">[\s\S]*?<\/div><h3 class="title">([^<]+)<\/h3><\/a>/g;
-
-    let match;
-    while ((match = episodeRegex.exec(html)) !== null) {
-        results.push({
-            href: match[1].trim(),
-            title: match[2].trim()
-        });
-    }
-
-    return JSON.stringify(results);
-}
-
-async function extractStreamUrl(url) {
-    const response = await soraFetch(url);
-    const html = await response.text();
-
-    const videoMatch = html.match(/<video[^>]*src="([^"]+)"/);
-    const streamUrl = videoMatch ? videoMatch[1] : null;
-
-    return JSON.stringify({ streamUrl });
-}
-
-async function soraFetch(url, options = { headers: {}, method: 'GET', body: null }) {
-    try {
-        return await fetchv2(url, options.headers ?? {}, options.method ?? 'GET', options.body ?? null);
-    } catch (error) {
-        console.error('Error fetching URL:', error);
-        return null;
-    }
+    const fileMatch = html.match(/file:\s*"([^"]+\.m3u8)"/);
+    return fileMatch ? fileMatch[1] : null;
 }
