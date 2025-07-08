@@ -1,106 +1,100 @@
 const baseUrl = "https://www.faselhds.xyz";
 
 async function soraFetch(url, options = {}) {
-    try {
-        return await fetchV2(
-            url,
-            options.headers ?? {},
-            options.method ?? "GET",
-            options.body ?? null
-        );
-    } catch (err) {
-        console.error("soraFetch error:", err);
-        return null;
-    }
+  try {
+    return await fetchV2(url, options.headers ?? {}, options.method ?? "GET", options.body ?? null);
+  } catch (err) {
+    console.error("soraFetch error:", err);
+    return null;
+  }
 }
 
-async function searchResults(query) {
-    const url = `${baseUrl}/?s=${encodeURIComponent(query)}`;
-    const html = await soraFetch(url);
-    if (!html) return [];
+async function searchResults(keyword) {
+  const url = `${baseUrl}/?s=${encodeURIComponent(keyword)}`;
+  const res = await soraFetch(url);
+  if (!res) return [];
+  const html = await res.text();
 
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const items = doc.querySelectorAll("div.postDiv");
-    const results = [];
+  const regex = /<div class="postDiv "[\s\S]*?<a href="([^"]+)">[\s\S]*?<img[^>]+src="([^"]+)"[\s\S]*?<div class="h1">([^<]+)<\/div>/g;
+  const results = [];
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    let href = match[1].trim();
+    let image = match[2].trim();
+    const title = match[3].trim();
 
-    items.forEach(item => {
-        const a = item.querySelector("a");
-        if (!a) return;
+    if (href.startsWith("/")) href = baseUrl + href;
+    if (image.startsWith("/")) image = baseUrl + image;
 
-        let href = a.getAttribute("href") || "";
-        if (href.startsWith("/")) href = baseUrl + href;
+    results.push({ title, href, image });
+  }
 
-        const imgEl = item.querySelector("div.imgdiv-class img");
-        let image = imgEl?.getAttribute("src") ?? "";
-        if (image.startsWith("/")) image = baseUrl + image;
+  // Optionally dedupe by href
+  const unique = [];
+  const seen = new Set();
+  for (const item of results) {
+    if (!seen.has(item.href)) {
+      seen.add(item.href);
+      unique.push(item);
+    }
+  }
 
-        const titleEl = item.querySelector("div.h1");
-        const title = titleEl?.textContent.trim() ?? "";
-
-        if (href && title) {
-            results.push({ title, href, image });
-        }
-    });
-
-    return results;
+  return unique;
 }
 
 async function extractDetails(url) {
-    const html = await soraFetch(url);
-    if (!html) return null;
+  const res = await soraFetch(url);
+  if (!res) return null;
+  const html = await res.text();
 
-    const doc = new DOMParser().parseFromString(html, "text/html");
+  // Title
+  const titleMatch = html.match(/<div class="h1 title">([\s\S]*?)<\/div>/);
+  const title = titleMatch ? titleMatch[1].trim() : "";
 
-    const title = doc.querySelector("div.h1.title")?.textContent.trim() ?? "";
-    const description = doc.querySelector(".singleDesc p")?.textContent.trim() ?? "";
-    const imgEl = doc.querySelector("div.posterImg img");
-    let image = imgEl?.getAttribute("src") ?? "";
-    if (image.startsWith("/")) image = baseUrl + image;
+  // Description
+  const descMatch = html.match(/<div class="singleDesc">\s*<p>([\s\S]*?)<\/p>/);
+  const description = descMatch ? descMatch[1].trim() : "";
 
-    return { title, description, image };
+  // Poster
+  const imgMatch = html.match(/<div class="posterImg">[\s\S]*?<img[^>]+src="([^"]+)"/);
+  let image = imgMatch ? imgMatch[1].trim() : "";
+  if (image.startsWith("/")) image = baseUrl + image;
+
+  return { title, description, image };
 }
 
 async function extractEpisodes(url) {
-    // faselhds.xyz does not expose episode lists in a consistent HTML structure
-    // Episodes are not supported in this version
-    return [];
+  // Faselhds doesn’t provide a consistent episodes list in HTML; skip for now
+  return [];
 }
 
 async function extractStreamUrl(url) {
-    const html = await soraFetch(url);
-    if (!html) return [];
+  const res = await soraFetch(url);
+  if (!res) return [];
+  const html = await res.text();
 
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const servers = doc.querySelectorAll("ul.tabs-ul li");
-    const sources = [];
+  // Find the first /video_player? link
+  const playerMatch = html.match(/onclick="player_iframe\.location\.href ='([^']+)'/);
+  if (!playerMatch) return [];
 
-    for (const li of servers) {
-        const onclick = li.getAttribute("onclick") || "";
-        const m = onclick.match(/'(\/video_player\?[^']+)'/);
-        if (!m) continue;
+  let playerUrl = playerMatch[1];
+  if (playerUrl.startsWith("/")) playerUrl = baseUrl + playerUrl;
 
-        let playerUrl = m[1];
-        if (!playerUrl.startsWith("http")) playerUrl = baseUrl + playerUrl;
+  const playerRes = await soraFetch(playerUrl);
+  if (!playerRes) return [];
+  const playerHtml = await playerRes.text();
 
-        const playerHtml = await soraFetch(playerUrl);
-        if (!playerHtml) continue;
+  // Try JWPlayer .m3u8
+  const fileMatch = playerHtml.match(/file:\s*"([^"]+\.m3u8)"/);
+  if (fileMatch) {
+    return [{ url: fileMatch[1], isM3U8: true }];
+  }
 
-        // Try to extract .m3u8 from JWPlayer config
-        const fileMatch = playerHtml.match(/file:\s*"([^"]+\.m3u8)"/);
-        if (fileMatch) {
-            sources.push({ url: fileMatch[1], isM3U8: true });
-            break;
-        }
+  // Fallback to direct <video src="...">
+  const videoMatch = playerHtml.match(/<video[^>]+src="([^"]+)"/);
+  if (videoMatch) {
+    return [{ url: videoMatch[1], isM3U8: videoMatch[1].includes(".m3u8") }];
+  }
 
-        // Fallback: look for a <video> tag
-        const vdoc = new DOMParser().parseFromString(playerHtml, "text/html");
-        const videoEl = vdoc.querySelector("video");
-        const src = videoEl?.getAttribute("src") ?? "";
-        if (src && !src.startsWith("blob:")) {
-            sources.push({ url: src, isM3U8: src.includes(".m3u8") });
-            break;
-        }
-    }
-
-    return sources;
+  return [];
 }
